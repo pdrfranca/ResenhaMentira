@@ -1,43 +1,92 @@
-export type AvatarId = "cat" | "alien" | "wizard" | "toast" | "ghost" | "frog";
-export type Phase = "lobby" | "answering" | "voting" | "reveal" | "finished";
+export type AvatarId =
+  | "fox"
+  | "cat"
+  | "alien"
+  | "robot"
+  | "frog"
+  | "ghost"
+  | "duck"
+  | "skull";
 
 export type Player = {
   id: string;
   name: string;
   avatar: AvatarId;
-  accent: string;
-  host?: boolean;
+  color: string;
   score: number;
-  online?: boolean;
-  ready?: boolean;
+  host?: boolean;
+};
+
+export type Theme =
+  | "Escola"
+  | "Trabalho"
+  | "Família"
+  | "Viagem"
+  | "Internet"
+  | "Primeiros encontros";
+
+export type Phase =
+  | "lobby"
+  | "special-theme"
+  | "answering"
+  | "voting"
+  | "reveal"
+  | "finished";
+
+export type PublicRound = {
+  number: number;
+  targetId: string;
+  question: string;
+  answers: string[];
+  theme?: Theme;
+  doublePoints: boolean;
+  submitted: boolean;
+  votedIds: string[];
+};
+
+export type RoundResult = {
+  correctAnswer: number;
+  winners: string[];
+  winnerPoints: number;
+  targetPoints: number;
 };
 
 export type GameState = {
   phase: Phase;
-  round: number;
-  totalRounds: number;
-  targetId: string | null;
-  question: string;
-  answers: string[];
-  correctIndex: number | null;
-  votes: Record<string, number>;
-  votingDone: string[];
-  theme: string | null;
-  doublePoints: boolean;
+  round: PublicRound;
+  players: Player[];
+  result: RoundResult | null;
   chaosUsed: boolean;
-  chaosBy: string | null;
-  specialChosen: boolean;
-  lastResult: { winnerText: string; answerIndex: number | null } | null;
+  chaos?: {
+    active: boolean;
+    by: string;
+    returnTo: "answering" | "voting";
+    startedAt: number;
+  } | null;
 };
 
-export type WireMessage =
-  | { type: "hello"; player: Player }
-  | { type: "request_state"; playerId: string }
-  | { type: "state"; state: GameState; players: Player[] }
-  | { type: "set_ready"; playerId: string; ready: boolean }
-  | { type: "start_game"; state: GameState }
-  | { type: "submit_answers"; playerId: string; answers: string[]; correctIndex: number }
-  | { type: "vote"; playerId: string; answerIndex: number }
-  | { type: "use_chaos"; playerId: string }
-  | { type: "choose_theme"; theme: string }
-  | { type: "chat"; playerId: string; text: string };
+export type ChatMessage = {
+  id: string;
+  playerId: string;
+  playerName: string;
+  avatar: AvatarId;
+  color: string;
+  text: string;
+  createdAt: number;
+};
+
+export type WireEvent =
+  | { type: "STATE_REQUEST"; from: string }
+  | { type: "STATE_SYNC"; state: GameState }
+  | { type: "START_GAME"; state: GameState }
+  | { type: "SELECT_THEME"; theme: Theme; from: string }
+  | {
+      type: "SUBMIT_ANSWERS";
+      from: string;
+      answers: string[];
+      correctIndex: number;
+    }
+  | { type: "CAST_VOTE"; from: string; answerIndex: number }
+  | { type: "START_CHAOS"; from: string; returnTo: "answering" | "voting" }
+  | { type: "END_CHAOS" }
+  | { type: "CHAT"; message: ChatMessage };

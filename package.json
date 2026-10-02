@@ -4,8 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "npx serve@latest out"
+    "build": "next build"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.2",
@@ -19,7 +18,7 @@
     "@types/node": "22.15.21",
     "@types/react": "19.1.2",
     "@types/react-dom": "19.1.2",
-    "@types/three": "^0.186.0",
+    "@types/three": "0.186.0",
     "typescript": "5.8.3"
   }
 }
