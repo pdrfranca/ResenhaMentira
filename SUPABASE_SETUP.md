@@ -1,46 +1,42 @@
-# Multiplayer com Supabase Realtime
+# Supabase Realtime
 
-O jogo não precisa de banco de dados para funcionar. Ele usa um canal público por sala, Presence para presença dos jogadores e Broadcast para eventos do jogo e chat.
+O GitHub Pages hospeda o frontend estático. O Supabase Realtime faz a comunicação entre os computadores.
 
-## 1. Criar o projeto
+## 1. Projeto
 
-No Supabase, crie um projeto novo.
+Crie um projeto no Supabase.
 
-## 2. Copiar as credenciais
+## 2. Credenciais usadas pelo navegador
 
-No Dashboard, abra o diálogo Connect ou Settings → API Keys e copie:
+No painel do projeto, obtenha:
 
-- Project URL
-- Publishable key (`sb_publishable_...`)
-
-Não use a Secret key no navegador.
-
-## 3. Configurar o jogo
-
-Você pode abrir ⚙ no jogo e colar os valores. Eles ficam salvos apenas no localStorage daquele navegador.
-
-Ou, localmente, crie `.env.local`:
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://SEU-PROJETO.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```text
+Project URL
+Publishable key
 ```
 
-## 4. GitHub Pages
+Cole no botão `⚙` dentro do jogo ou use as variáveis:
 
-No GitHub, abra:
+```text
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+```
 
-`Settings → Secrets and variables → Actions`
+## 3. Realtime
 
-Crie:
+O jogo usa canais privados por código de sala no formato:
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+```text
+mentira:ABCDE
+```
 
-O workflow lê esses secrets durante o build.
+São usados:
 
-## 5. Realtime
+- Broadcast para estado, respostas, votos e chat.
+- Presence para os jogadores conectados.
 
-O aplicativo usa canais públicos. Caso o serviço Realtime esteja desativado no projeto, ative o Realtime no Dashboard.
+Não é necessário criar tabela para o MVP porque o estado da partida fica no host da sala e é enviado aos clientes por Realtime.
 
-Não há SQL obrigatório para esse modo do jogo.
+## 4. Segurança
+
+A chave pública pode aparecer no frontend. Não exponha `service_role` nem outras chaves secretas.

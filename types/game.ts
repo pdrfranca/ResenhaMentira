@@ -38,6 +38,7 @@ export type PublicRound = {
   targetId: string;
   question: string;
   answers: string[];
+  correctIndex: number;
   theme?: Theme;
   doublePoints: boolean;
   submitted: boolean;

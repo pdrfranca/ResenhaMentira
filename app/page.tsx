@@ -29,6 +29,7 @@ const defaultRound = (targetId = "") => ({
   targetId,
   question: getQuestion(1),
   answers: ["", "", ""],
+  correctIndex: 0,
   doublePoints: false,
   submitted: false,
   votedIds: []
@@ -61,9 +62,32 @@ function isPlayer(value: unknown): value is Player {
   return typeof item.id === "string" && typeof item.name === "string" && typeof item.avatar === "string" && typeof item.color === "string" && typeof item.score === "number";
 }
 
+function loadInitialProfile(): Player {
+  if (typeof window !== "undefined") {
+    const saved = window.localStorage.getItem(PROFILE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Partial<Player>;
+        if (isPlayer({ ...parsed, score: parsed.score ?? 0 })) {
+          return createPlayerProfile(
+            parsed.name || "Jogador",
+            (parsed.avatar as AvatarId) || "fox",
+            parsed.color || COLORS[0],
+            parsed.id || makePlayerId()
+          );
+        }
+      } catch {}
+    }
+    const initial = createPlayerProfile("Jogador", "fox", COLORS[0], makePlayerId());
+    window.localStorage.setItem(PROFILE_KEY, JSON.stringify(initial));
+    return initial;
+  }
+  return createPlayerProfile("Jogador", "fox", COLORS[0], "");
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("lobby");
-  const [profile, setProfile] = useState<Player>(() => createPlayerProfile("Jogador", "fox", COLORS[0], ""));
+  const [profile, setProfile] = useState<Player>(() => loadInitialProfile());
   const [draftName, setDraftName] = useState("");
   const [draftAvatar, setDraftAvatar] = useState<AvatarId>("fox");
   const [draftColor, setDraftColor] = useState(COLORS[0]);
@@ -121,31 +145,13 @@ export default function Home() {
   const allVoted = round.votedIds.length >= Math.max(0, players.length - 1);
 
   useEffect(() => {
-    const savedProfile = window.localStorage.getItem(PROFILE_KEY);
-    const savedRoom = window.localStorage.getItem(ROOM_KEY);
-    if (savedProfile) {
-      try {
-        const parsed = JSON.parse(savedProfile) as Partial<Player>;
-        if (isPlayer({ ...parsed, score: parsed.score ?? 0 })) {
-          const id = parsed.id || makePlayerId();
-          setProfile(createPlayerProfile(parsed.name || "Jogador", parsed.avatar as AvatarId, parsed.color || COLORS[0], id));
-          setDraftName(parsed.name || "Jogador");
-          setDraftAvatar(parsed.avatar as AvatarId);
-          setDraftColor(parsed.color || COLORS[0]);
-        }
-      } catch {
-        // Ignore old local profile.
-      }
-    } else {
-      const id = makePlayerId();
-      const initial = createPlayerProfile("Jogador", "fox", COLORS[0], id);
-      setProfile(initial);
-      setDraftName(initial.name);
-      window.localStorage.setItem(PROFILE_KEY, JSON.stringify(initial));
-    }
+    setDraftName(profile.name);
+    setDraftAvatar(profile.avatar);
+    setDraftColor(profile.color);
     setSupabaseConfig(readSupabaseConfig());
+    const savedRoom = window.localStorage.getItem(ROOM_KEY);
     if (savedRoom) setRoomInput(savedRoom);
-  }, []);
+  }, [profile.id]);
 
   const applyState = useCallback((nextState: GameState) => {
     stateRef.current = nextState;
@@ -196,9 +202,11 @@ export default function Home() {
     }
 
     await disconnect();
+    setMessages([]);
     setConnectionError("");
     setConnectionStatus("Conectando...");
     const supabase = createBrowserSupabase(config);
+    if (role === "host") hostIdRef.current = profileRef.current.id;
     const channel = supabase.channel(`mentira:${cleanCode}`, {
       config: {
         broadcast: { self: true, ack: true },
@@ -255,6 +263,7 @@ export default function Home() {
         if (event.answers.length !== 3 || event.answers.some((answer) => answer.trim().length < 2)) return;
         const correctIndex = Math.min(2, Math.max(0, event.correctIndex));
         state.round.answers = event.answers.map((answer) => answer.trim());
+        state.round.correctIndex = correctIndex;
         state.round.submitted = true;
         state.round.votedIds = [];
         secretCorrectRef.current = correctIndex;
@@ -274,7 +283,7 @@ export default function Home() {
         state.round.votedIds = [...state.round.votedIds, event.from];
 
         if (state.round.votedIds.length >= Math.max(0, playersRef.current.length - 1)) {
-          const correct = secretCorrectRef.current;
+          const correct = state.round.correctIndex;
           const winnerIds = playersRef.current.filter((player) => player.id !== state.round.targetId && secretVotesRef.current[player.id] === correct).map((player) => player.id);
           const winnerPoints = winnerIds.length > 0 ? (state.round.doublePoints ? 2 : 1) : 0;
           const targetPoints = winnerIds.length === 0 ? (state.round.doublePoints ? 6 : 3) : 0;
@@ -345,6 +354,18 @@ export default function Home() {
           stateRef.current = next;
         } else {
           const currentHostOnline = !hostIdRef.current || online.some((player) => player.id === hostIdRef.current);
+
+          if (hostIdRef.current === profileRef.current.id && stateRef.current?.phase === "answering" && !online.some((player) => player.id === stateRef.current?.round.targetId)) {
+            const replacement = online[0];
+            if (replacement) {
+              const repaired = cloneState(stateRef.current);
+              repaired.round = { ...repaired.round, targetId: replacement.id, question: getQuestion(repaired.round.number, repaired.round.theme), answers: ["", "", ""], correctIndex: 0, submitted: false, votedIds: [] };
+              stateRef.current = repaired;
+              applyState(repaired);
+              try { await sendEvent({ type: "STATE_SYNC", state: repaired }); } catch {}
+            }
+          }
+
           const electedHost = [...online].sort((a, b) => a.id.localeCompare(b.id))[0]?.id;
           if (!currentHostOnline && electedHost) hostIdRef.current = electedHost;
 
@@ -362,30 +383,49 @@ export default function Home() {
             try { await sendEvent({ type: "STATE_SYNC", state: promoted }); } catch {}
           }
         }
-      })
-      .subscribe(async (status, error) => {
+      });
+
+    channelRef.current = channel;
+    supabaseRef.current = supabase;
+
+    const subscriptionOk = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      channel.subscribe(async (status, error) => {
         if (status === "SUBSCRIBED") {
           setConnectionStatus("Conectado");
-          await channel.track({
-            id: profileRef.current.id,
-            name: profileRef.current.name,
-            avatar: profileRef.current.avatar,
-            color: profileRef.current.color,
-            score: profileRef.current.score,
-            host: hostIdRef.current === profileRef.current.id,
-            online_at: new Date().toISOString()
-          });
+          try {
+            await channel.track({
+              id: profileRef.current.id,
+              name: profileRef.current.name,
+              avatar: profileRef.current.avatar,
+              color: profileRef.current.color,
+              score: profileRef.current.score,
+              host: role === "host" || hostIdRef.current === profileRef.current.id,
+              online_at: new Date().toISOString()
+            });
+          } catch (trackError) {
+            if (!settled) { settled = true; resolve(false); }
+            setConnectionStatus("Erro de conexão");
+            setConnectionError(trackError instanceof Error ? trackError.message : "Não foi possível anunciar o jogador.");
+            return;
+          }
+          if (!settled) { settled = true; resolve(true); }
           if (role === "guest") {
             try { await sendEvent({ type: "STATE_REQUEST", from: profileRef.current.id }); } catch {}
           }
         } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
           setConnectionStatus("Erro de conexão");
           setConnectionError(error?.message || `Status: ${status}`);
+          if (!settled) { settled = true; resolve(false); }
         }
       });
+    });
 
-    channelRef.current = channel;
-    supabaseRef.current = supabase;
+    if (!subscriptionOk) {
+      await disconnect();
+      return false;
+    }
+
     setRoomCode(cleanCode);
     window.localStorage.setItem(ROOM_KEY, cleanCode);
     setSupabaseConfig(config);
@@ -429,13 +469,41 @@ export default function Home() {
     };
   }, [chaosOverlay]);
 
-  const submitProfile = () => {
+  const submitProfile = async () => {
     const name = draftName.trim() || "Jogador";
     const id = profile.id || makePlayerId();
     const next = createPlayerProfile(name, draftAvatar, draftColor, id);
     setProfile(next);
     profileRef.current = next;
     window.localStorage.setItem(PROFILE_KEY, JSON.stringify(next));
+    setPlayers((current) => current.map((player) => player.id === id ? { ...player, ...next, host: player.host } : player));
+
+    if (channelRef.current) {
+      try {
+        await channelRef.current.track({
+          id: next.id,
+          name: next.name,
+          avatar: next.avatar,
+          color: next.color,
+          score: next.score,
+          host: hostIdRef.current === next.id,
+          online_at: new Date().toISOString()
+        });
+      } catch (error) {
+        setConnectionError(error instanceof Error ? error.message : "Não foi possível atualizar o personagem na sala.");
+        return;
+      }
+    }
+
+    if (stateRef.current) {
+      const nextState = cloneState(stateRef.current);
+      nextState.players = nextState.players.map((player) => player.id === id ? { ...player, ...next, host: player.host } : player);
+      stateRef.current = nextState;
+      if (hostIdRef.current === id) {
+        try { await sendEvent({ type: "STATE_SYNC", state: nextState }); } catch {}
+      }
+    }
+
     setShowSetup(false);
     setConnectionError("");
   };
@@ -443,6 +511,9 @@ export default function Home() {
   const createRoom = async () => {
     if (!profile.id) return;
     const nextRoom = makeRoomCode();
+    const ok = await connectToRoom(nextRoom, "host");
+    if (!ok) return;
+
     hostIdRef.current = profile.id;
     const lobbyState: GameState = {
       phase: "lobby",
@@ -454,9 +525,9 @@ export default function Home() {
     };
     stateRef.current = lobbyState;
     applyState(lobbyState);
-    const ok = await connectToRoom(nextRoom, "host");
-    if (!ok) return;
-    try { await sendEvent({ type: "STATE_SYNC", state: lobbyState }); } catch {}
+    try { await sendEvent({ type: "STATE_SYNC", state: lobbyState }); } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Não foi possível sincronizar a sala.");
+    }
   };
 
   const joinRoom = async () => {
@@ -469,6 +540,7 @@ export default function Home() {
     if (!isHost || players.length < 2) return;
     const firstRound = defaultRound(players[0].id);
     firstRound.question = getQuestion(1);
+    firstRound.correctIndex = 0;
     const state: GameState = {
       phase: "answering",
       round: firstRound,
@@ -528,7 +600,7 @@ export default function Home() {
     if (number === 6) {
       const next = cloneState(stateRef.current!);
       next.phase = "special-theme";
-      next.round = { ...defaultRound(players[5 % players.length]?.id || players[0].id), number, targetId: players[5 % players.length]?.id || players[0].id, question: "", doublePoints: true, submitted: false, votedIds: [] };
+      next.round = { ...defaultRound(players[5 % players.length]?.id || players[0].id), number, targetId: players[5 % players.length]?.id || players[0].id, question: "", answers: ["", "", ""], correctIndex: 0, doublePoints: true, submitted: false, votedIds: [] };
       next.result = null;
       next.chaos = null;
       stateRef.current = next;
@@ -546,6 +618,7 @@ export default function Home() {
         targetId,
         question: getQuestion(number),
         answers: ["", "", ""],
+        correctIndex: 0,
         doublePoints: false,
         submitted: false,
         votedIds: []
@@ -584,9 +657,15 @@ export default function Home() {
       createdAt: Date.now()
     };
     setChatInput("");
+    setMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current;
+      return [...current, message].slice(-120);
+    });
     try {
       await sendEvent({ type: "CHAT", message });
     } catch (error) {
+      setMessages((current) => current.filter((item) => item.id !== message.id));
+      setChatInput(text);
       setConnectionError(error instanceof Error ? error.message : "Falha ao enviar mensagem.");
     }
   };
@@ -812,8 +891,8 @@ export default function Home() {
       {connectionError && roomCode && <div style={{ position: "fixed", left: 14, bottom: 14, zIndex: 40, maxWidth: "min(560px, calc(100% - 28px))" }}><div className="panel panel-pad" style={{ borderColor: "rgba(255,92,168,.3)" }}><div className="status-line error" style={{ margin: 0 }}>{connectionError}</div></div></div>}
 
       {showSetup && (
-        <div className="chaos-modal" onMouseDown={() => setShowSetup(false)}>
-          <div className="panel panel-pad" style={{ width: "min(760px,100%)" }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="chaos-modal settings-modal" onMouseDown={() => setShowSetup(false)}>
+          <div className="panel panel-pad settings-panel" onMouseDown={(event) => event.stopPropagation()}>
             <div className="roundbar"><div><div className="round-label">SEU PERSONAGEM</div><h2 className="section-title">Quem é você na mesa?</h2></div><button className="ghost-button" onClick={() => setShowSetup(false)}>Fechar</button></div>
             <div className="setup-grid" style={{ marginTop: 16 }}>
               <div>
@@ -834,7 +913,7 @@ export default function Home() {
 
       {showHow && (
         <div className="chaos-modal" onMouseDown={() => setShowHow(false)}>
-          <div className="panel panel-pad" style={{ width: "min(760px,100%)" }} onMouseDown={(event) => event.stopPropagation()}>
+          <div className="panel panel-pad info-modal-panel" onMouseDown={(event) => event.stopPropagation()}>
             <div className="roundbar"><div><div className="round-label">COMO JOGAR</div><h2 className="section-title">Aqui, falar a verdade é suspeito.</h2></div><button className="ghost-button" onClick={() => setShowHow(false)}>Fechar</button></div>
             <div className="rules" style={{ display: "grid", gap: 10, marginTop: 16 }}>
               <div className="panel panel-pad"><strong>01 · Alvo</strong><div className="status-line">O alvo responde com três frases. Uma é verdade; duas são inventadas.</div></div>
