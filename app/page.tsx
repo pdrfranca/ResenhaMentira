@@ -83,7 +83,7 @@ export default function Home() {
       setAvatar(stored.avatar);
       setAccent(stored.accent);
     }
-    scopeRef.current = createScope({ root: document });
+    scopeRef.current = createScope({ root: document.documentElement });
     return () => scopeRef.current?.revert();
   }, []);
 
@@ -232,10 +232,14 @@ export default function Home() {
         const votedAnswer = winners[0].i;
         const correct = next.correctIndex ?? -1;
         const updatedPlayers = playersRef.current.map((p) => {
-          if (p.id === correct) return p;
+          if (p.id === next.targetId) return p;
+
           const gain = next.doublePoints ? 2 : 1;
           const gotRight = nextVotes[p.id] === correct;
-          return gotRight ? { ...p, score: p.score + gain } : p;
+
+          return gotRight
+            ? { ...p, score: p.score + gain }
+            : p;
         });
         const target = playersRef.current.find((p) => p.id === next.targetId);
         const correctCount = Object.values(nextVotes).filter((i) => i === correct).length;
